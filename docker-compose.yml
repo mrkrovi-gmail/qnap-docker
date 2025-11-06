@@ -3,5 +3,5 @@ services:
     image: traefik/whoami:latest
     container_name: whoami
     ports:
-      - "8080:80"
+      - "8989:80"
     restart: unless-stopped
