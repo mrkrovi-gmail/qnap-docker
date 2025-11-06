@@ -1,7 +1,87 @@
+version: "3.8"
+
+name: zabbix-stack
+
+networks:
+  zbx-net:
+    driver: bridge
+
 services:
-  whoami:
-    image: traefik/whoami:latest
-    container_name: whoami
+  postgres:
+    image: postgres:16
+    container_name: zbx-postgres
+    networks: [zbx-net]
+    environment:
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Europe/Prague
+    command: >
+      postgres -c shared_buffers=512MB
+               -c work_mem=16MB
+               -c maintenance_work_mem=256MB
+               -c max_connections=200
+    volumes:
+      - /share/Container/zabbix/postgres/data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:alpine-7.0-latest
+    container_name: zabbix-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [zbx-net]
+    environment:
+      DB_SERVER_HOST: postgres
+      DB_SERVER_PORT: 5432
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: zabbix
+      ZBX_TIMEOUT: "4"
+      TZ: Europe/Prague
+      # ZBX_DEBUGLEVEL: "3"   # volitelné
     ports:
-      - "8989:80"
+      - "10051:10051"
+    volumes:
+      - /share/Container/zabbix/server/externalscripts:/usr/lib/zabbix/externalscripts
+      - /share/Container/zabbix/server/alertscripts:/usr/lib/zabbix/alertscripts
+      - /share/Container/zabbix/server/export:/var/lib/zabbix/export
+      - /share/Container/zabbix/server/enc:/var/lib/zabbix/enc
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -lc '</dev/tcp/127.0.0.1/10051' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  zabbix-frontend:
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-7.0-latest
+    container_name: zabbix-frontend
+    depends_on:
+      - zabbix-server
+    networks: [zbx-net]
+    environment:
+      DB_SERVER_HOST: postgres
+      DB_SERVER_PORT: 5432
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: zabbix
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_SERVER_PORT: 10051
+      PHP_TZ: Europe/Prague
+    ports:
+      - "8081:8080"        # Web UI: http://NAS:8081
+    volumes:
+      - /share/Container/zabbix/frontend/modules:/usr/share/zabbix/modules
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
